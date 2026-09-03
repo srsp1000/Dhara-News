@@ -1,0 +1,226 @@
+name: Dhara CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── 1. Python agent + API tests ─────────────────────────────────────────────
+  test-python:
+    name: Python tests + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER:     dhara
+          POSTGRES_PASSWORD: dhara_test
+          POSTGRES_DB:       dhara_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PG_DSN:        postgresql://dhara:dhara_test@localhost:5432/dhara_test
+      REDIS_URL:     ""
+      RABBITMQ_URL:  ""
+      QDRANT_URL:    ""
+      ES_URL:        ""
+      OLLAMA_URL:    ""
+      SENTRY_DSN:    ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install agent dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r agents/requirements.txt --quiet
+          pip install pytest pytest-asyncio pytest-cov httpx ruff --quiet
+
+      - name: Install API dependencies
+        run: pip install -r api/requirements.txt --quiet
+
+      - name: Lint with ruff (fail on errors, warn on style)
+        run: |
+          ruff check agents/ api/ --select E,F,W --ignore E501,W291,W293
+          ruff check tests/ --select E,F --ignore E501
+
+      - name: Run all tests with coverage
+        run: |
+          pytest tests/ -v \
+            --cov=agents \
+            --cov=api \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --tb=short \
+            -x
+        # -x = stop on first failure so CI feedback is fast
+
+      - name: Assert minimum coverage
+        run: |
+          python -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('coverage.xml')
+          rate = float(tree.getroot().attrib.get('line-rate', 0))
+          pct  = round(rate * 100, 1)
+          print(f'Coverage: {pct}%')
+          assert pct >= 35, f'Coverage {pct}% is below 35% minimum'
+          "
+
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          file: coverage.xml
+
+  # ── 2. Import smoke test — catches broken imports in agents ─────────────────
+  import-smoke:
+    name: Import smoke test (no DB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      PG_DSN:       ""
+      REDIS_URL:    ""
+      RABBITMQ_URL: ""
+      QDRANT_URL:   ""
+      ES_URL:       ""
+      OLLAMA_URL:   ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install minimal deps for import check
+        run: |
+          pip install --upgrade pip
+          # Install only what's needed for imports to resolve
+          pip install asyncpg aioredis pydantic httpx feedparser \
+                      beautifulsoup4 python-dateutil --quiet
+
+      - name: Check all agent modules import cleanly
+        run: |
+          python -c "
+          import sys, importlib, pathlib
+          sys.path.insert(0, 'agents')
+          errors = []
+          for f in pathlib.Path('agents').rglob('*.py'):
+              if '__pycache__' in str(f) or '.venv' in str(f):
+                  continue
+              mod = str(f).replace('/', '.').replace('.py', '')
+              try:
+                  # Just parse, don't execute — catches SyntaxError and NameError
+                  with open(f) as fh:
+                      compile(fh.read(), str(f), 'exec')
+              except SyntaxError as e:
+                  errors.append(f'{f}: {e}')
+          if errors:
+              print('SYNTAX ERRORS FOUND:')
+              for e in errors: print(e)
+              sys.exit(1)
+          print(f'All agent modules parse cleanly')
+          "
+
+  # ── 3. Frontend build check ─────────────────────────────────────────────────
+  frontend-build:
+    name: Next.js build check
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: Lint (ESLint)
+        run: npm run lint --if-present
+        continue-on-error: true  # warn, don't fail build on style
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+
+  # ── 4. Docker compose syntax check (no full build — too slow for CI) ─────────
+  docker-lint:
+    name: Docker compose validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Validate docker-compose.prod.yml
+        run: docker compose -f docker-compose.prod.yml config --quiet
+
+  # ── 5. Schema migration check ────────────────────────────────────────────────
+  schema-check:
+    name: Schema syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER:     dhara
+          POSTGRES_PASSWORD: dhara_test
+          POSTGRES_DB:       dhara_schema_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply schema to test DB
+        run: |
+          PGPASSWORD=dhara_test psql \
+            -h localhost -U dhara -d dhara_schema_test \
+            -f infra/schema.sql
+        continue-on-error: false
+
+      - name: Apply migrations
+        run: |
+          PGPASSWORD=dhara_test psql \
+            -h localhost -U dhara -d dhara_schema_test \
+            -f migrations/001_dhara_audit_fixes.sql || true

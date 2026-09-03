@@ -1,0 +1,28 @@
+User-agent: *
+Allow: /
+Allow: /article/
+Allow: /upsc
+Allow: /medical
+Allow: /law
+Allow: /technology
+Allow: /finance
+Allow: /student
+Allow: /location/
+Allow: /search
+Allow: /archive
+Allow: /morning-brief
+Allow: /trending
+Allow: /about
+Disallow: /api/
+Disallow: /login
+Disallow: /signup
+Disallow: /profile
+Disallow: /saves
+Disallow: /auth/
+Disallow: /admin/
+
+Sitemap: https://dhara.news/sitemap.xml
+Sitemap: https://dhara.news/feed.rss
+
+# Crawl-delay for well-behaved bots
+Crawl-delay: 1

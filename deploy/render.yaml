@@ -1,0 +1,94 @@
+# render.yaml — Deploy to Render.com (free tier to start)
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+
+  # ── FastAPI Backend ─────────────────────────────────────────
+  - type: web
+    name: dhara-api
+    runtime: docker
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    plan: starter   # $7/month — upgrade when you have revenue
+    region: singapore   # closest to India
+    envVars:
+      - key: PG_DSN
+        fromDatabase:
+          name: dhara-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: dhara-redis
+          type: redis
+          property: connectionString
+      - key: GROQ_API_KEY
+        sync: false   # set manually in Render dashboard
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+    healthCheckPath: /
+
+  # ── Next.js Frontend ────────────────────────────────────────
+  - type: web
+    name: dhara-frontend
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    plan: free   # free forever for static/SSR
+    region: singapore
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: dhara-api
+          type: web
+          property: host
+          transform: "https://{value}"
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+
+  # ── Background Worker (agents) ──────────────────────────────
+  # Run the full pipeline as a single background worker on Render
+  # For production scale: split into individual services
+  - type: worker
+    name: dhara-pipeline
+    runtime: docker
+    dockerfilePath: ./agents/Dockerfile
+    dockerContext: ./agents
+    plan: starter   # $7/month
+    region: singapore
+    startCommand: python -m ingestion.rss_feed &
+                  python -m deduplication.fingerprint &
+                  python -m verification.truth_score &
+                  python -m nlp.summarization &
+                  python -m publishing.publish_queue &
+                  python -m monitoring.truth_score_updater &
+                  wait
+    envVars:
+      - key: PG_DSN
+        fromDatabase:
+          name: dhara-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: dhara-redis
+          type: redis
+          property: connectionString
+      - key: GROQ_API_KEY
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false  # Use CloudAMQP free tier: https://www.cloudamqp.com
+      - key: QDRANT_URL
+        sync: false  # Use Qdrant Cloud free tier: https://cloud.qdrant.io
+
+databases:
+  - name: dhara-postgres
+    plan: free   # 1GB free on Render
+    databaseName: dhara
+    user: dhara
+
+  - name: dhara-redis
+    plan: free   # 25MB free on Render

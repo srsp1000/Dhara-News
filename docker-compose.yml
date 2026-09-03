@@ -1,0 +1,690 @@
+# ============================================================
+# Dhara News Platform — Full Local Development Stack
+# Run everything locally: zero cost, all 42 agents, full infra
+# Usage: docker compose up -d
+# ============================================================
+
+networks:
+  dhara:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  qdrant_data:
+  elasticsearch_data:
+  ollama_data:
+  minio_data:
+
+services:
+
+  # ── INFRASTRUCTURE ────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dhara_postgres
+    networks: [dhara]
+    environment:
+      POSTGRES_DB: dhara
+      POSTGRES_USER: dhara
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dhara_local_dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infra:/docker-entrypoint-initdb.d/infra
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dhara"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: dhara_redis
+    networks: [dhara]
+    volumes: [redis_data:/data]
+    ports: ["6379:6379"]
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: dhara_rabbitmq
+    networks: [dhara]
+    environment:
+      RABBITMQ_DEFAULT_USER: dhara
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-dhara_local}
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Management UI: http://localhost:15672
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: dhara_qdrant
+    networks: [dhara]
+    volumes: [qdrant_data:/qdrant/storage]
+    ports: ["6333:6333"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 60s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: dhara_elasticsearch
+    networks: [dhara]
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms256m -Xmx512m"
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    volumes: [elasticsearch_data:/usr/share/elasticsearch/data]
+    ports: ["9200:9200"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+        reservations:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --max-time 25 http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 30s
+      timeout: 30s
+      retries: 20
+      start_period: 120s
+
+  minio:
+    image: minio/minio:latest
+    container_name: dhara_minio
+    networks: [dhara]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dhara_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dhara_minio_secret}
+    volumes: [minio_data:/data]
+    ports:
+      - "9000:9000"
+      - "9001:9001"   # Console: http://localhost:9001
+    command: server /data --console-address ":9001"
+
+  # ── LOCAL LLM (replaces Claude API — FREE) ─────────────────
+  # Uses llama3.1:8b — runs on CPU (slow but free)
+  # For GPU: add "deploy: resources: reservations: devices: [{driver: nvidia, ...}]"
+  # To disable Ollama and use only Groq/GitHub Models, comment out this block.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dhara_ollama
+    networks: [dhara]
+    volumes: [ollama_data:/root/.ollama]
+    ports: ["11434:11434"]
+    restart: unless-stopped
+    # Requires 8-16GB RAM. Use Groq (free) or GitHub Models instead for low-RAM machines.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:11434/api/tags > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  
+  # ── CIVIC INTELLIGENCE AGENTS ─────────────────────────────
+  # Unique content no competitor offers
+
+  dhara_agent_parliament:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_parliament
+    networks: [dhara]
+    command: python -m civic.parliament
+    env_file: .env
+    environment:
+      PG_DSN: "postgresql://dhara:dhara_local_dev@postgres:5432/dhara"
+      REDIS_URL: "redis://redis:6379/0"
+      RABBITMQ_URL: "amqp://dhara:dhara_local@rabbitmq:5672/"
+    depends_on: {rabbitmq: {condition: service_healthy}}
+    restart: unless-stopped
+
+  dhara_agent_court:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_court
+    networks: [dhara]
+    command: python -m civic.court
+    env_file: .env
+    environment:
+      PG_DSN: "postgresql://dhara:dhara_local_dev@postgres:5432/dhara"
+      REDIS_URL: "redis://redis:6379/0"
+      RABBITMQ_URL: "amqp://dhara:dhara_local@rabbitmq:5672/"
+    depends_on: {rabbitmq: {condition: service_healthy}}
+    restart: unless-stopped
+
+  dhara_agent_wikipedia:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_wikipedia
+    networks: [dhara]
+    command: python -m civic.wikipedia
+    env_file: .env
+    environment:
+      PG_DSN: "postgresql://dhara:dhara_local_dev@postgres:5432/dhara"
+      REDIS_URL: "redis://redis:6379/0"
+      RABBITMQ_URL: "amqp://dhara:dhara_local@rabbitmq:5672/"
+    depends_on: {rabbitmq: {condition: service_healthy}}
+    restart: unless-stopped
+
+# ── OBSERVABILITY ─────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dhara_prometheus
+    networks: [dhara]
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports: ["9090:9090"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9090/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dhara_grafana
+    networks: [dhara]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports: ["3003:3000"]   # Dashboard: http://localhost:3003 (admin/admin)
+    depends_on:
+      prometheus: {condition: service_healthy}
+
+  # ── API GATEWAY ───────────────────────────────────────────
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: dhara_api
+    networks: [dhara]
+    env_file: .env
+    ports: ["8000:8000"]
+    volumes: ["./api:/app", "./shared:/app/shared", "./frontend/lib:/app/frontend/lib"]
+    depends_on:
+      postgres:    {condition: service_healthy}
+      redis:       {condition: service_healthy}
+      rabbitmq:    {condition: service_healthy}
+      elasticsearch: {condition: service_healthy}
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: dhara_libretranslate
+    networks: [dhara]
+    ports: ["5001:5000"]
+    environment:
+      LT_LOAD_ONLY: "en,hi"
+      LT_UPDATE_MODELS: "false"
+    restart: unless-stopped
+
+  # ── AGENT WORKERS ─────────────────────────────────────────
+  # Each agent = separate container = independent scaling
+
+  # -- Ingestion Cluster --
+  agent-web-crawler:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_crawler
+    networks: [dhara]
+    env_file: .env
+    environment: {AGENT_MODULE: ingestion.web_crawler}
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m ingestion.web_crawler
+    restart: unless-stopped
+
+  agent-rss-feed:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_rss
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m ingestion.rss_feed
+    restart: unless-stopped
+
+  agent-html-crawler:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_html_crawler
+    networks: [dhara]
+    env_file: .env
+    environment: {AGENT_MODULE: ingestion.html_crawler}
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m ingestion.html_crawler
+    restart: unless-stopped
+
+  agent-newsapi:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_newsapi
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m ingestion.newsapi_agent
+    restart: unless-stopped
+
+  agent-social-signal:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_social
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m ingestion.social_signal
+    restart: unless-stopped
+
+  agent-image-harvester:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_images
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m ingestion.image_harvester
+    restart: unless-stopped
+
+  # -- Deduplication Cluster --
+  agent-fingerprint:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_fingerprint
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m deduplication.fingerprint
+    restart: unless-stopped
+
+  agent-semantic-dedup:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_dedup
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}, qdrant: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m deduplication.semantic_dedup
+    restart: unless-stopped
+
+  agent-story-cluster:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_cluster
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m deduplication.story_cluster
+    restart: unless-stopped
+
+  # -- Verification Cluster --
+  agent-claim-extraction:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.claim_extraction
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  agent-cross-reference:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_xref
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}, qdrant: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.cross_reference
+    restart: unless-stopped
+
+  agent-source-credibility:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_cred
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.source_credibility
+    restart: unless-stopped
+
+  agent-truth-score:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_truth
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.truth_score
+    restart: unless-stopped
+
+  agent-contradiction:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_contradiction
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.contradiction_detector
+    restart: unless-stopped
+
+  agent-satire:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_satire
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.satire_detector
+    restart: unless-stopped
+
+  agent-fake-signal:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_fake
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.fake_signal
+    restart: unless-stopped
+
+  agent-image-verify:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_img_verify
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m verification.image_verification
+    restart: unless-stopped
+
+  # -- NLP & Content Cluster --
+  agent-entity-extraction:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.entity_extraction
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  agent-topic-classifier:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_topics
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.topic_classifier
+    restart: unless-stopped
+
+  agent-summarization:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.summarization
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+
+  agent-rewrite:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_rewrite
+    networks: [dhara]
+    env_file: .env
+    environment:
+      REWRITE_MIN_WORDS: ${REWRITE_MIN_WORDS:-650}
+      REWRITE_MAX_WORDS: ${REWRITE_MAX_WORDS:-950}
+      REWRITE_MAX_TOKENS: ${REWRITE_MAX_TOKENS:-1400}
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.rewrite
+    restart: unless-stopped
+
+  agent-headline:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_headline
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.headline_generator
+    restart: unless-stopped
+
+  agent-translation:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_translate
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.translation
+    restart: unless-stopped
+
+  agent-terminology:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_terms
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.terminology_explainer
+    restart: unless-stopped
+
+  agent-exam-tagger:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_exam
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.exam_tagger
+    restart: unless-stopped
+
+  agent-story-timeline:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_timeline
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m nlp.story_timeline
+    restart: unless-stopped
+
+  # -- Personalization Cluster --
+  agent-profession-feed:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_profession
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m personalization.profession_feed
+    restart: unless-stopped
+
+  agent-location-feed:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_location
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m personalization.location_feed
+    restart: unless-stopped
+
+  agent-trending:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_trending
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m personalization.trending_detector
+    restart: unless-stopped
+
+  agent-morning-brief:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_brief
+    networks: [dhara]
+    env_file: .env
+    depends_on: {postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m personalization.morning_brief
+    restart: unless-stopped
+
+  agent-notification:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_notify
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m personalization.notification
+    restart: unless-stopped
+
+  agent-reading-depth:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_depth
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m personalization.reading_depth
+    restart: unless-stopped
+
+  # -- Search Cluster --
+  agent-search-indexer:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_indexer
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, elasticsearch: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m monitoring.search_indexer
+    restart: unless-stopped
+
+  # -- Publishing Cluster --
+  agent-publish-queue:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_publish
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, elasticsearch: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m publishing.publish_queue
+    restart: unless-stopped
+
+  agent-seo:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_seo
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m publishing.seo_agent
+    restart: unless-stopped
+
+  agent-social-share:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_share
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m publishing.social_share
+    restart: unless-stopped
+
+  # -- Monitoring Cluster --
+  agent-truth-updater:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_truth_update
+    networks: [dhara]
+    env_file: .env
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}, qdrant: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m monitoring.truth_score_updater
+    restart: unless-stopped
+
+  agent-pipeline-health:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_health
+    networks: [dhara]
+    env_file: .env
+    depends_on: {rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m monitoring.pipeline_health
+    restart: unless-stopped
+
+  agent-bias-drift:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_bias
+    networks: [dhara]
+    env_file: .env
+    depends_on: {postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m monitoring.bias_drift
+    restart: unless-stopped
+
+  agent-ad-quality:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_ads
+    networks: [dhara]
+    env_file: .env
+    depends_on: {postgres: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m monitoring.ad_quality
+    restart: unless-stopped
+
+  agent-breaking-news:
+    build: {context: ., dockerfile: ./agents/Dockerfile}
+    container_name: dhara_agent_breaking
+    networks: [dhara]
+    env_file: .env
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    volumes: ["./agents:/app/agents"]
+    command: python -m monitoring.breaking_news_detector
+    restart: unless-stopped
+
+  # ── FRONTEND ──────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: dhara_frontend
+    networks: [dhara]
+    environment:
+      # NEXT_PUBLIC_* vars are baked into the browser bundle at build time
+      # They must point to where the browser can reach the API (host machine)
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # INTERNAL_API_URL is used by Next.js server components running inside the container
+      INTERNAL_API_URL: http://api:8000
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      NODE_ENV: development
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+      WATCHPACK_POLLING: "true"
+    ports: ["3000:3000"]
+    volumes: ["./frontend:/app", "/app/node_modules", "/app/.next"]
+    depends_on: [api]
+    command: npm run dev
+

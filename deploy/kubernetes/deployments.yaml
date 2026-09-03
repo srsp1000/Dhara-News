@@ -1,0 +1,350 @@
+# deploy/kubernetes/dhara-api.yaml
+# Enterprise Kubernetes deployment for Dhara News API
+# kubectl apply -f deploy/kubernetes/
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dhara
+  labels:
+    app: dhara-news
+
+---
+# ConfigMap for non-secret configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dhara-config
+  namespace: dhara
+data:
+  OLLAMA_MODEL: "llama3.1:8b"
+  ES_URL: "http://elasticsearch-service:9200"
+  QDRANT_URL: "http://qdrant-service:6333"
+  REDIS_URL: "redis://redis-service:6379/0"
+  RABBITMQ_URL: "amqp://dhara:$(RABBITMQ_PASSWORD)@rabbitmq-service:5672/"
+
+---
+# Secret (base64 encoded — use kubectl create secret or Sealed Secrets in prod)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dhara-secrets
+  namespace: dhara
+type: Opaque
+stringData:
+  PG_DSN: "postgresql://dhara:CHANGE_ME@postgres-service:5432/dhara"
+  RABBITMQ_PASSWORD: "CHANGE_ME"
+  SUPABASE_SERVICE_KEY: "CHANGE_ME"
+  GROQ_API_KEY: "CHANGE_ME"
+  RAZORPAY_KEY_ID: "CHANGE_ME"
+  RAZORPAY_KEY_SECRET: "CHANGE_ME"
+  FCM_SERVER_KEY: "CHANGE_ME"
+
+---
+# API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhara-api
+  namespace: dhara
+  labels:
+    app: dhara-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dhara-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0          # zero-downtime deploy
+  template:
+    metadata:
+      labels:
+        app: dhara-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/YOUR_ORG/dhara-api:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: dhara-config
+            - secretRef:
+                name: dhara-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30
+
+---
+# API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dhara-api-service
+  namespace: dhara
+spec:
+  selector:
+    app: dhara-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+# HorizontalPodAutoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dhara-api-hpa
+  namespace: dhara
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: dhara-api
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhara-frontend
+  namespace: dhara
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dhara-frontend
+  template:
+    metadata:
+      labels:
+        app: dhara-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/YOUR_ORG/dhara-frontend:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              value: "https://api.dhara.news"
+            - name: NEXT_PUBLIC_SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dhara-secrets
+                  key: SUPABASE_URL
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+
+---
+# Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dhara-frontend-service
+  namespace: dhara
+spec:
+  selector:
+    app: dhara-frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+
+---
+# Ingress with SSL termination
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dhara-ingress
+  namespace: dhara
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://dhara.news"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN";
+      add_header X-Content-Type-Options "nosniff";
+      add_header Strict-Transport-Security "max-age=31536000";
+spec:
+  tls:
+    - hosts:
+        - dhara.news
+        - www.dhara.news
+        - api.dhara.news
+      secretName: dhara-tls
+  rules:
+    - host: dhara.news
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dhara-frontend-service
+                port:
+                  number: 3000
+    - host: api.dhara.news
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dhara-api-service
+                port:
+                  number: 8000
+
+---
+# Agents Deployment (core pipeline workers)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhara-agents-ingestion
+  namespace: dhara
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dhara-agents-ingestion
+  template:
+    metadata:
+      labels:
+        app: dhara-agents-ingestion
+    spec:
+      containers:
+        - name: rss-agent
+          image: ghcr.io/YOUR_ORG/dhara-agents:latest
+          command: ["python", "-m", "ingestion.rss_feed"]
+          envFrom:
+            - configMapRef:
+                name: dhara-config
+            - secretRef:
+                name: dhara-secrets
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+        - name: crawler-agent
+          image: ghcr.io/YOUR_ORG/dhara-agents:latest
+          command: ["python", "-m", "ingestion.web_crawler"]
+          envFrom:
+            - configMapRef:
+                name: dhara-config
+            - secretRef:
+                name: dhara-secrets
+          resources:
+            requests: { cpu: "200m", memory: "384Mi" }
+            limits:   { cpu: "1000m", memory: "768Mi" }
+
+---
+# Verification agents — scale independently
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhara-agents-verification
+  namespace: dhara
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dhara-agents-verification
+  template:
+    metadata:
+      labels:
+        app: dhara-agents-verification
+    spec:
+      containers:
+        - name: truth-score
+          image: ghcr.io/YOUR_ORG/dhara-agents:latest
+          command: ["python", "-m", "verification.truth_score"]
+          envFrom:
+            - configMapRef:
+                name: dhara-config
+            - secretRef:
+                name: dhara-secrets
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "1000m", memory: "1Gi" }
+        - name: cross-reference
+          image: ghcr.io/YOUR_ORG/dhara-agents:latest
+          command: ["python", "-m", "verification.cross_reference"]
+          envFrom:
+            - configMapRef:
+                name: dhara-config
+            - secretRef:
+                name: dhara-secrets
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "1000m", memory: "1Gi" }
+
+---
+# KEDA ScaledObject — auto-scale verification based on RabbitMQ queue depth
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: dhara-verification-scaler
+  namespace: dhara
+spec:
+  scaleTargetRef:
+    name: dhara-agents-verification
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  triggers:
+    - type: rabbitmq
+      metadata:
+        protocol: amqp
+        queueName: verify.claims
+        mode: QueueLength
+        value: "50"           # scale up when >50 messages queued
+      authenticationRef:
+        name: dhara-rabbitmq-trigger-auth

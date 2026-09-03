@@ -1,0 +1,8 @@
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json .
+RUN npm install
+COPY . .
+EXPOSE 3000
+# Clear stale .next cache before starting to prevent 404 on static assets
+CMD ["sh", "-c", "rm -rf .next && npm run dev"]

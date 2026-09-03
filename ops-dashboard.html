@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dhara News — Operations Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  
+  .top-bar { background: #1e3a5f; padding: 1rem 1.5rem; display: flex; align-items: center; gap: 1rem; border-bottom: 1px solid #334155; }
+  .logo { font-size: 22px; font-weight: 800; color: #fff; }
+  .logo span { color: #fcd34d; font-size: 13px; margin-left: 6px; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; margin-left: auto; animation: pulse-green 2s infinite; }
+  @keyframes pulse-green { 0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.4)} 70%{box-shadow:0 0 0 8px rgba(34,197,94,0)} }
+  .status-text { font-size: 12px; color: #86efac; }
+  
+  .grid { display: grid; grid-template-columns: 280px 1fr; gap: 0; height: calc(100vh - 56px); }
+  
+  /* Left sidebar */
+  .sidebar { background: #1e293b; border-right: 1px solid #334155; overflow-y: auto; padding: 1rem; }
+  .section-label { font-size: 10px; font-weight: 700; color: #475569; letter-spacing: .08em; text-transform: uppercase; margin: 1rem 0 .5rem; padding: 0 .5rem; }
+  .service-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; margin-bottom: 2px; cursor: pointer; transition: background .15s; }
+  .service-row:hover { background: #334155; }
+  .service-row.active { background: #1e3a5f; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot-up    { background: #22c55e; }
+  .dot-down  { background: #ef4444; }
+  .dot-warn  { background: #f59e0b; }
+  .dot-check { background: #3b82f6; animation: spin-dot 1.5s linear infinite; }
+  @keyframes spin-dot { to { transform: rotate(360deg); } }
+  .svc-name { font-size: 13px; color: #cbd5e1; flex: 1; }
+  .svc-port { font-size: 10px; color: #475569; }
+  
+  /* Main content */
+  .main { overflow-y: auto; }
+  .tab-bar { display: flex; gap: 2px; padding: .75rem 1.5rem 0; border-bottom: 1px solid #334155; background: #1e293b; }
+  .tab { padding: 8px 16px; font-size: 13px; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .15s; border-radius: 6px 6px 0 0; }
+  .tab:hover { color: #cbd5e1; }
+  .tab.on { color: #fff; border-bottom-color: #3b82f6; background: #0f172a; }
+  
+  .panel { display: none; padding: 1.5rem; }
+  .panel.on { display: block; }
+  
+  /* Cards */
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.2rem; margin-bottom: 1rem; }
+  .card-title { font-size: 14px; font-weight: 600; color: #f1f5f9; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .card-grid { display: grid; gap: .75rem; }
+  .card-grid-2 { grid-template-columns: 1fr 1fr; }
+  .card-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .card-grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  
+  /* Metric */
+  .metric { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 1rem; text-align: center; }
+  .metric-n { font-size: 28px; font-weight: 700; color: #f1f5f9; }
+  .metric-l { font-size: 11px; color: #64748b; margin-top: 3px; }
+  .metric-n.green { color: #22c55e; }
+  .metric-n.amber { color: #f59e0b; }
+  .metric-n.red   { color: #ef4444; }
+  .metric-n.blue  { color: #3b82f6; }
+  
+  /* Service link */
+  .svc-link { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #0f172a; border: 1px solid #334155; border-radius: 10px; margin-bottom: 8px; text-decoration: none; transition: border-color .15s; }
+  .svc-link:hover { border-color: #3b82f6; }
+  .svc-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .svc-info { flex: 1; }
+  .svc-title { font-size: 14px; font-weight: 600; color: #f1f5f9; }
+  .svc-desc  { font-size: 12px; color: #64748b; margin-top: 1px; }
+  .svc-url   { font-size: 11px; color: #3b82f6; font-family: monospace; }
+  .open-btn  { padding: 5px 12px; background: #1e3a5f; color: #93c5fd; border: 1px solid #1e4a7f; border-radius: 7px; font-size: 12px; text-decoration: none; white-space: nowrap; }
+  .open-btn:hover { background: #1e4a7f; }
+  
+  /* Command */
+  .cmd-block { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: .8rem 1rem; font-family: 'Courier New', monospace; font-size: 13px; color: #86efac; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .cmd-text  { flex: 1; overflow-x: auto; white-space: nowrap; }
+  .cmd-note  { font-size: 11px; color: #475569; font-family: system-ui; flex-shrink: 0; }
+  .copy-btn  { padding: 3px 8px; background: #1e293b; border: 1px solid #334155; border-radius: 5px; font-size: 11px; color: #94a3b8; cursor: pointer; flex-shrink: 0; }
+  .copy-btn:hover { border-color: #3b82f6; color: #93c5fd; }
+  
+  /* Agent grid */
+  .agent-pill { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; border: 1px solid; display: inline-flex; align-items: center; gap: 5px; margin: 3px; }
+  .ap-up   { background: #052e16; border-color: #16a34a; color: #86efac; }
+  .ap-down { background: #450a0a; border-color: #dc2626; color: #fca5a5; }
+  .ap-warn { background: #431407; border-color: #ea580c; color: #fdba74; }
+  
+  /* Steps */
+  .step { display: flex; gap: 14px; margin-bottom: 1rem; }
+  .step-num { width: 28px; height: 28px; border-radius: 50%; background: #1e3a5f; color: #93c5fd; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step-body { flex: 1; padding-top: 4px; }
+  .step-title { font-size: 14px; font-weight: 600; color: #f1f5f9; margin-bottom: 5px; }
+  .step-desc  { font-size: 13px; color: #94a3b8; line-height: 1.6; }
+  
+  /* Badge */
+  .badge { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 8px; font-weight: 600; margin-left: 5px; }
+  .b-ok  { background: #052e16; color: #86efac; }
+  .b-err { background: #450a0a; color: #fca5a5; }
+  .b-fix { background: #431407; color: #fdba74; }
+  .b-new { background: #1e1b4b; color: #a5b4fc; }
+  
+  /* Queue viz */
+  .queue-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #1e293b; }
+  .q-name    { font-size: 12px; color: #94a3b8; font-family: monospace; width: 220px; flex-shrink: 0; }
+  .q-bar-bg  { flex: 1; height: 6px; background: #0f172a; border-radius: 3px; overflow: hidden; }
+  .q-bar     { height: 100%; border-radius: 3px; transition: width .5s; }
+  .q-val     { font-size: 11px; color: #64748b; width: 40px; text-align: right; }
+  
+  a { color: inherit; }
+  .mono { font-family: 'Courier New', monospace; font-size: 12px; color: #86efac; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="logo">धारा <span>NEWS OPS</span></div>
+  <div id="clock" style="font-size:12px;color:#64748b;margin-left:auto"></div>
+  <div class="status-text" id="overall-status">Checking...</div>
+  <div class="status-dot" id="overall-dot"></div>
+</div>
+
+<div class="grid">
+
+  <!-- LEFT SIDEBAR: Service status -->
+  <aside class="sidebar">
+    <div class="section-label">Core Services</div>
+    <div id="core-services"></div>
+    
+    <div class="section-label">Agent Clusters</div>
+    <div id="agent-clusters"></div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <div class="main">
+    <div class="tab-bar">
+      <div class="tab on"  onclick="showPanel('access')">🌐 Access</div>
+      <div class="tab"     onclick="showPanel('agents')">🤖 Agents</div>
+      <div class="tab"     onclick="showPanel('commands')">💻 Commands</div>
+      <div class="tab"     onclick="showPanel('fix')">🔧 Fix Issues</div>
+      <div class="tab"     onclick="showPanel('monitor')">📊 Monitor</div>
+      <div class="tab"     onclick="showPanel('deploy')">🚀 Deploy</div>
+    </div>
+
+    <!-- ACCESS PANEL -->
+    <div class="panel on" id="panel-access">
+      <div class="card">
+        <div class="card-title">📊 Platform Stats</div>
+        <div class="card-grid card-grid-4">
+          <div class="metric"><div class="metric-n blue" id="stat-containers">–</div><div class="metric-l">Containers</div></div>
+          <div class="metric"><div class="metric-n green" id="stat-running">–</div><div class="metric-l">Running</div></div>
+          <div class="metric"><div class="metric-n amber" id="stat-unhealthy">–</div><div class="metric-l">Unhealthy</div></div>
+          <div class="metric"><div class="metric-n" id="stat-uptime">–</div><div class="metric-l">Last check</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🌐 Open in Browser</div>
+        <a class="svc-link" href="http://localhost:3000" target="_blank">
+          <div class="svc-icon" style="background:#1e3a5f">📰</div>
+          <div class="svc-info">
+            <div class="svc-title">Dhara News App</div>
+            <div class="svc-desc">Main frontend — news feed, search, archive, morning brief</div>
+            <div class="svc-url">http://localhost:3000</div>
+          </div>
+          <a class="open-btn" href="http://localhost:3000" target="_blank">Open →</a>
+        </a>
+        <a class="svc-link" href="http://localhost:8000/docs" target="_blank">
+          <div class="svc-icon" style="background:#0c4a6e">🔌</div>
+          <div class="svc-info">
+            <div class="svc-title">API Documentation (Swagger)</div>
+            <div class="svc-desc">Interactive API explorer — test every endpoint</div>
+            <div class="svc-url">http://localhost:8000/docs</div>
+          </div>
+          <a class="open-btn" href="http://localhost:8000/docs" target="_blank">Open →</a>
+        </a>
+        <a class="svc-link" href="http://localhost:3003" target="_blank">
+          <div class="svc-icon" style="background:#431407">📊</div>
+          <div class="svc-info">
+            <div class="svc-title">Grafana — Monitoring</div>
+            <div class="svc-desc">Real-time pipeline metrics, queue depths, agent health</div>
+            <div class="svc-url">http://localhost:3003 &nbsp;·&nbsp; admin / admin</div>
+          </div>
+          <a class="open-btn" href="http://localhost:3003" target="_blank">Open →</a>
+        </a>
+        <a class="svc-link" href="http://localhost:15672" target="_blank">
+          <div class="svc-icon" style="background:#431407">🐰</div>
+          <div class="svc-info">
+            <div class="svc-title">RabbitMQ Management</div>
+            <div class="svc-desc">Message queues, pipeline flow, dead-letter queues</div>
+            <div class="svc-url">http://localhost:15672 &nbsp;·&nbsp; dhara / dhara_local</div>
+          </div>
+          <a class="open-btn" href="http://localhost:15672" target="_blank">Open →</a>
+        </a>
+        <a class="svc-link" href="http://localhost:9200" target="_blank">
+          <div class="svc-icon" style="background:#0c2d48">🔍</div>
+          <div class="svc-info">
+            <div class="svc-title">Elasticsearch</div>
+            <div class="svc-desc">Full-text search engine — check index health</div>
+            <div class="svc-url">http://localhost:9200 &nbsp;·&nbsp; No auth</div>
+          </div>
+          <a class="open-btn" href="http://localhost:9200" target="_blank">Open →</a>
+        </a>
+        <a class="svc-link" href="http://localhost:9001" target="_blank">
+          <div class="svc-icon" style="background:#1a1a1a">📦</div>
+          <div class="svc-info">
+            <div class="svc-title">MinIO — Object Storage</div>
+            <div class="svc-desc">Article images, assets. S3-compatible.</div>
+            <div class="svc-url">http://localhost:9001 &nbsp;·&nbsp; dhara_minio / dhara_minio_secret</div>
+          </div>
+          <a class="open-btn" href="http://localhost:9001" target="_blank">Open →</a>
+        </a>
+        <a class="svc-link" href="http://localhost:6333/dashboard" target="_blank">
+          <div class="svc-icon" style="background:#1e1b4b">🧮</div>
+          <div class="svc-info">
+            <div class="svc-title">Qdrant — Vector Database</div>
+            <div class="svc-desc">Semantic deduplication, cross-reference similarity</div>
+            <div class="svc-url">http://localhost:6333/dashboard</div>
+          </div>
+          <a class="open-btn" href="http://localhost:6333/dashboard" target="_blank">Open →</a>
+        </a>
+      </div>
+    </div>
+
+    <!-- AGENTS PANEL -->
+    <div class="panel" id="panel-agents">
+      <div class="card">
+        <div class="card-title">🤖 All 42 Agents — Status</div>
+        <div id="agent-status-grid" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:1rem"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">📨 Message Queue Depths</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:10px">
+          Check at: <a href="http://localhost:15672/#/queues" target="_blank" style="color:#3b82f6">localhost:15672 → Queues</a>
+          &nbsp;·&nbsp; DLQ (dead-letter) depth should always be 0
+        </div>
+        <div>
+          <div class="queue-row"><div class="q-name">ingest.raw</div><div class="q-bar-bg"><div class="q-bar" style="width:20%;background:#22c55e"></div></div><div class="q-val">~</div></div>
+          <div class="queue-row"><div class="q-name">dedup.fingerprint</div><div class="q-bar-bg"><div class="q-bar" style="width:15%;background:#22c55e"></div></div><div class="q-val">~</div></div>
+          <div class="queue-row"><div class="q-name">verify.claims</div><div class="q-bar-bg"><div class="q-bar" style="width:35%;background:#f59e0b"></div></div><div class="q-val">~</div></div>
+          <div class="queue-row"><div class="q-name">nlp.summarize</div><div class="q-bar-bg"><div class="q-bar" style="width:25%;background:#3b82f6"></div></div><div class="q-val">~</div></div>
+          <div class="queue-row"><div class="q-name">pub.gate</div><div class="q-bar-bg"><div class="q-bar" style="width:10%;background:#22c55e"></div></div><div class="q-val">~</div></div>
+          <div class="queue-row"><div class="q-name" style="color:#ef4444">dlq.* (all DLQs)</div><div class="q-bar-bg"><div class="q-bar" style="width:0%;background:#ef4444"></div></div><div class="q-val" style="color:#ef4444">0</div></div>
+        </div>
+        <p style="font-size:11px;color:#475569;margin-top:8px">Live queue depths only available in RabbitMQ UI. Open it above → Queues tab.</p>
+      </div>
+    </div>
+
+    <!-- COMMANDS PANEL -->
+    <div class="panel" id="panel-commands">
+
+      <div class="card">
+        <div class="card-title">⚡ Quick Commands — Windows PowerShell</div>
+
+        <p style="font-size:12px;color:#64748b;margin-bottom:12px">
+          Run all commands from inside your <span class="mono">dhara-full</span> folder.
+          In PowerShell: <span class="mono">cd "C:\Users\...\dhara-full"</span>
+        </p>
+
+        <div class="section-label" style="margin-top:0">Start / Stop</div>
+        <div class="cmd-block"><span class="cmd-text">docker compose up -d</span><span class="cmd-note">Start everything</span><button class="copy-btn" onclick="copy(this,'docker compose up -d')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose down</span><span class="cmd-note">Stop everything</span><button class="copy-btn" onclick="copy(this,'docker compose down')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose down &amp;&amp; docker compose up -d</span><span class="cmd-note">Full restart</span><button class="copy-btn" onclick="copy(this,'docker compose down && docker compose up -d')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose restart frontend</span><span class="cmd-note">Restart only frontend</span><button class="copy-btn" onclick="copy(this,'docker compose restart frontend')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose restart api</span><span class="cmd-note">Restart only API</span><button class="copy-btn" onclick="copy(this,'docker compose restart api')">Copy</button></div>
+
+        <div class="section-label">Logs</div>
+        <div class="cmd-block"><span class="cmd-text">docker compose logs -f --tail=50</span><span class="cmd-note">All logs live</span><button class="copy-btn" onclick="copy(this,'docker compose logs -f --tail=50')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose logs -f frontend</span><span class="cmd-note">Frontend only</span><button class="copy-btn" onclick="copy(this,'docker compose logs -f frontend')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose logs -f api</span><span class="cmd-note">API only</span><button class="copy-btn" onclick="copy(this,'docker compose logs -f api')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose logs -f agent-truth-score agent-rss-feed</span><span class="cmd-note">Specific agents</span><button class="copy-btn" onclick="copy(this,'docker compose logs -f agent-truth-score agent-rss-feed')">Copy</button></div>
+
+        <div class="section-label">Status</div>
+        <div class="cmd-block"><span class="cmd-text">docker compose ps</span><span class="cmd-note">All container statuses</span><button class="copy-btn" onclick="copy(this,'docker compose ps')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker stats --no-stream</span><span class="cmd-note">CPU + RAM per container</span><button class="copy-btn" onclick="copy(this,'docker stats --no-stream')">Copy</button></div>
+
+        <div class="section-label">Database</div>
+        <div class="cmd-block"><span class="cmd-text">docker compose exec postgres psql -U dhara -d dhara</span><span class="cmd-note">Open psql shell</span><button class="copy-btn" onclick="copy(this,'docker compose exec postgres psql -U dhara -d dhara')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose exec -T postgres psql -U dhara -d dhara -c "SELECT status, COUNT(*) FROM story_clusters GROUP BY status;"</span><span class="cmd-note">Article stats</span><button class="copy-btn" onclick="copy(this,`docker compose exec -T postgres psql -U dhara -d dhara -c \"SELECT status, COUNT(*) FROM story_clusters GROUP BY status;\"`)">Copy</button></div>
+
+        <div class="section-label">LLM Model</div>
+        <div class="cmd-block"><span class="cmd-text">docker compose exec ollama ollama pull llama3.1:8b</span><span class="cmd-note">Download 4.7GB model</span><button class="copy-btn" onclick="copy(this,'docker compose exec ollama ollama pull llama3.1:8b')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose exec ollama ollama pull llama3.2:3b</span><span class="cmd-note">Smaller model (low RAM)</span><button class="copy-btn" onclick="copy(this,'docker compose exec ollama ollama pull llama3.2:3b')">Copy</button></div>
+        <div class="cmd-block"><span class="cmd-text">docker compose exec ollama ollama list</span><span class="cmd-note">See downloaded models</span><button class="copy-btn" onclick="copy(this,'docker compose exec ollama ollama list')">Copy</button></div>
+      </div>
+    </div>
+
+    <!-- FIX ISSUES PANEL -->
+    <div class="panel" id="panel-fix">
+      <div class="card">
+        <div class="card-title">🔧 Common Issues &amp; Fixes</div>
+
+        <div style="margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-fix">FIXED</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">Qdrant unhealthy (your current error)</span>
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-bottom:8px;line-height:1.6">
+            The Qdrant health check endpoint was wrong. <strong>Already fixed</strong> in the latest zip — just re-run setup. 
+            Or fix immediately by running:
+          </div>
+          <div class="cmd-block"><span class="cmd-text">docker compose up -d qdrant</span><span class="cmd-note">Force restart Qdrant</span><button class="copy-btn" onclick="copy(this,'docker compose up -d qdrant')">Copy</button></div>
+          <div class="cmd-block"><span class="cmd-text">docker compose logs qdrant</span><span class="cmd-note">Check why it failed</span><button class="copy-btn" onclick="copy(this,'docker compose logs qdrant')">Copy</button></div>
+        </div>
+
+        <div style="margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-err">ISSUE</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">Frontend shows blank page or loading forever</span>
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-bottom:8px;line-height:1.6">
+            Next.js needs to compile on first start. Wait 60 seconds, then refresh. 
+            If still blank, check the frontend logs:
+          </div>
+          <div class="cmd-block"><span class="cmd-text">docker compose logs -f frontend</span><button class="copy-btn" onclick="copy(this,'docker compose logs -f frontend')">Copy</button></div>
+          <div style="font-size:12px;color:#64748b;margin-top:6px">
+            Look for: <span class="mono" style="color:#86efac">✓ Ready in Xs</span> — once you see that, refresh the browser.<br>
+            If you see <span class="mono" style="color:#fca5a5">npm ERR!</span> — run the npm fix below.
+          </div>
+          <div class="cmd-block" style="margin-top:8px"><span class="cmd-text">docker compose exec frontend npm install</span><span class="cmd-note">Fix missing packages</span><button class="copy-btn" onclick="copy(this,'docker compose exec frontend npm install')">Copy</button></div>
+          <div class="cmd-block"><span class="cmd-text">docker compose restart frontend</span><button class="copy-btn" onclick="copy(this,'docker compose restart frontend')">Copy</button></div>
+        </div>
+
+        <div style="margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-err">ISSUE</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">No articles appearing after 15 minutes</span>
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-bottom:8px;line-height:1.6">
+            The RSS agent may have crashed. Check its logs and restart it:
+          </div>
+          <div class="cmd-block"><span class="cmd-text">docker compose logs agent-rss-feed --tail=30</span><button class="copy-btn" onclick="copy(this,'docker compose logs agent-rss-feed --tail=30')">Copy</button></div>
+          <div class="cmd-block"><span class="cmd-text">docker compose restart agent-rss-feed agent-web-crawler</span><button class="copy-btn" onclick="copy(this,'docker compose restart agent-rss-feed agent-web-crawler')">Copy</button></div>
+          <div style="font-size:12px;color:#64748b;margin-top:6px">
+            Also check the database has articles: open <a href="http://localhost:8000/api/feed?limit=3" target="_blank" style="color:#3b82f6">localhost:8000/api/feed?limit=3</a>
+          </div>
+        </div>
+
+        <div style="margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-err">ISSUE</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">Port already in use (3000, 8000, etc.)</span>
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-bottom:8px;line-height:1.6">
+            Something else is using that port. Find and stop it:
+          </div>
+          <div class="cmd-block"><span class="cmd-text">netstat -ano | findstr :3000</span><span class="cmd-note">Find what's on port 3000</span><button class="copy-btn" onclick="copy(this,'netstat -ano | findstr :3000')">Copy</button></div>
+          <div class="cmd-block"><span class="cmd-text">taskkill /PID [PID_FROM_ABOVE] /F</span><span class="cmd-note">Kill the process</span></div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px">Or change the port in docker-compose.yml: "3001:3000" → access at localhost:3001</div>
+        </div>
+
+        <div style="margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-err">ISSUE</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">Out of disk space / Docker uses too much disk</span>
+          </div>
+          <div class="cmd-block"><span class="cmd-text">docker system df</span><span class="cmd-note">See disk usage</span><button class="copy-btn" onclick="copy(this,'docker system df')">Copy</button></div>
+          <div class="cmd-block"><span class="cmd-text">docker system prune -f</span><span class="cmd-note">Clean unused images/containers</span><button class="copy-btn" onclick="copy(this,'docker system prune -f')">Copy</button></div>
+        </div>
+
+        <div style="margin-bottom:1.5rem">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-err">ISSUE</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">Elasticsearch not starting (out of memory)</span>
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-bottom:8px;line-height:1.6">
+            Elasticsearch needs at least 2GB RAM. On Windows, increase Docker Desktop memory:
+            Docker Desktop → Settings → Resources → Memory → set to 8GB+
+          </div>
+          <div class="cmd-block"><span class="cmd-text">docker compose logs elasticsearch --tail=20</span><button class="copy-btn" onclick="copy(this,'docker compose logs elasticsearch --tail=20')">Copy</button></div>
+        </div>
+
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span class="badge b-fix">NUCLEAR</span>
+            <span style="font-size:14px;font-weight:600;color:#f1f5f9">Complete reset — start fresh</span>
+          </div>
+          <div style="font-size:13px;color:#f87171;margin-bottom:8px">⚠ This deletes ALL data (articles, database, etc.)</div>
+          <div class="cmd-block"><span class="cmd-text">docker compose down -v --remove-orphans</span><span class="cmd-note">Delete containers + volumes</span><button class="copy-btn" onclick="copy(this,'docker compose down -v --remove-orphans')">Copy</button></div>
+          <div class="cmd-block"><span class="cmd-text">py scripts/setup.py</span><span class="cmd-note">Fresh setup</span><button class="copy-btn" onclick="copy(this,'py scripts/setup.py')">Copy</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MONITOR PANEL -->
+    <div class="panel" id="panel-monitor">
+      <div class="card">
+        <div class="card-title">📊 What to monitor and where</div>
+
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <div class="step-title">RabbitMQ — Pipeline health</div>
+            <div class="step-desc">
+              Open <a href="http://localhost:15672/#/queues" target="_blank" style="color:#3b82f6">localhost:15672 → Queues tab</a><br>
+              <strong style="color:#f1f5f9">Green:</strong> All queue depths near 0, no DLQ messages<br>
+              <strong style="color:#f59e0b">Warning:</strong> verify.claims > 100 (verification backlog)<br>
+              <strong style="color:#ef4444">Alert:</strong> Any dlq.* queue has messages (processing failures)
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <div class="step-title">API health check</div>
+            <div class="step-desc">
+              Open <a href="http://localhost:8000/" target="_blank" style="color:#3b82f6">localhost:8000/</a> — should return <span class="mono">{"status":"ok"}</span><br>
+              Open <a href="http://localhost:8000/api/stats" target="_blank" style="color:#3b82f6">localhost:8000/api/stats</a> — see live article counts<br>
+              Open <a href="http://localhost:8000/api/metrics/pipeline" target="_blank" style="color:#3b82f6">localhost:8000/api/metrics/pipeline</a> — pipeline metrics
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <div class="step-title">Grafana dashboards</div>
+            <div class="step-desc">
+              Open <a href="http://localhost:3003" target="_blank" style="color:#3b82f6">localhost:3003</a> (admin / admin)<br>
+              → Dashboards → Browse → Import dashboard from <span class="mono">deploy/grafana/</span> (if added)<br>
+              Key metrics: articles/hour, truth score distribution, queue depths, API latency
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <div class="step-title">Database article counts</div>
+            <div class="cmd-block"><span class="cmd-text">docker compose exec -T postgres psql -U dhara -d dhara -c "SELECT status, COUNT(*), ROUND(AVG(truth_score),1) as avg_score FROM story_clusters GROUP BY status ORDER BY count DESC;"</span><button class="copy-btn" onclick="copy(this,`docker compose exec -T postgres psql -U dhara -d dhara -c \"SELECT status, COUNT(*), ROUND(AVG(truth_score),1) as avg_score FROM story_clusters GROUP BY status ORDER BY count DESC;\"`)">Copy</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DEPLOY PANEL -->
+    <div class="panel" id="panel-deploy">
+      <div class="card">
+        <div class="card-title">🚀 Deployment Tiers</div>
+        <div class="card-grid card-grid-3" style="margin-bottom:1rem">
+          <div class="metric" style="border-color:#334155">
+            <div class="metric-n green" style="font-size:18px">₹0</div>
+            <div class="metric-l" style="font-size:12px;margin-top:4px;color:#22c55e">Local Dev</div>
+            <div style="font-size:11px;color:#475569;margin-top:4px">Right now. Docker Compose.</div>
+          </div>
+          <div class="metric" style="border-color:#1e3a5f">
+            <div class="metric-n blue" style="font-size:18px">₹1,400</div>
+            <div class="metric-l" style="font-size:12px;margin-top:4px;color:#3b82f6">Cloud MVP</div>
+            <div style="font-size:11px;color:#475569;margin-top:4px">Render + Vercel + Supabase</div>
+          </div>
+          <div class="metric" style="border-color:#431407">
+            <div class="metric-n amber" style="font-size:18px">₹40K</div>
+            <div class="metric-l" style="font-size:12px;margin-top:4px;color:#f59e0b">Enterprise AWS</div>
+            <div style="font-size:11px;color:#475569;margin-top:4px">EKS + RDS + CloudFront</div>
+          </div>
+        </div>
+
+        <div style="font-size:13px;color:#94a3b8;margin-bottom:1rem;line-height:1.7">
+          Read the full deployment guide: <span class="mono">deploy/DEPLOY.md</span><br>
+          It has step-by-step instructions for every tier with exact commands.
+        </div>
+
+        <div class="section-label">Quick Cloud Deploy (Render.com — $14/month)</div>
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <div class="step-title">Create free Supabase project</div>
+            <div class="step-desc">
+              Go to <a href="https://supabase.com" target="_blank" style="color:#3b82f6">supabase.com</a> → New project → Singapore<br>
+              Copy URL + anon key → add to .env
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <div class="step-title">Push code to GitHub</div>
+            <div class="cmd-block"><span class="cmd-text">git init && git add . && git commit -m "init" && git remote add origin https://github.com/YOU/dhara && git push</span><button class="copy-btn" onclick="copy(this,'git init && git add . && git commit -m init && git push')">Copy</button></div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <div class="step-title">Deploy API to Render.com</div>
+            <div class="step-desc">
+              <a href="https://render.com" target="_blank" style="color:#3b82f6">render.com</a> → New Web Service → connect your GitHub repo<br>
+              Root: api/ · Build: pip install -r requirements.txt · Start: uvicorn main:app --host 0.0.0.0 --port $PORT<br>
+              Plan: Starter ($7/month) · Region: Singapore
+            </div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <div class="step-title">Deploy Frontend to Vercel</div>
+            <div class="cmd-block"><span class="cmd-text">npm i -g vercel && cd frontend && vercel --prod</span><button class="copy-btn" onclick="copy(this,'npm i -g vercel && cd frontend && vercel --prod')">Copy</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const SERVICES = [
+  { name:"Frontend",       port:3000, icon:"📰", path:"/" },
+  { name:"API",            port:8000, icon:"🔌", path:"/" },
+  { name:"Grafana",        port:3003, icon:"📊", path:"/" },
+  { name:"RabbitMQ",       port:15672,icon:"🐰", path:"/" },
+  { name:"Elasticsearch",  port:9200, icon:"🔍", path:"/" },
+  { name:"Qdrant",         port:6333, icon:"🧮", path:"/readyz" },
+  { name:"MinIO",          port:9001, icon:"📦", path:"/" },
+  { name:"Ollama",         port:11434,icon:"🤖", path:"/" },
+  { name:"LibreTranslate", port:5000, icon:"🌐", path:"/languages" },
+  { name:"Prometheus",     port:9090, icon:"📈", path:"/-/ready" },
+];
+
+const AGENTS = [
+  "rss-feed","web-crawler","newsapi","social-signal","image-harvester",
+  "fingerprint","semantic-dedup","story-cluster",
+  "claim-extraction","cross-reference","source-credibility","truth-score",
+  "contradiction","satire","fake-signal","image-verify",
+  "entity-extraction","topic-classifier","exam-tagger","summarization",
+  "rewrite","headline","translation","terminology","story-timeline",
+  "profession-feed","location-feed","trending","morning-brief","notification","reading-depth",
+  "publish-queue","seo","social-share","search-indexer",
+  "truth-updater","pipeline-health","bias-drift","ad-quality",
+  "api","frontend","libretranslate"
+];
+
+function showPanel(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.getElementById('panel-'+id).classList.add('on');
+  event.target.classList.add('on');
+}
+
+function copy(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.style.color = '#86efac';
+    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 1500);
+  });
+}
+
+// Clock
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent = 
+    now.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Render sidebar core services
+function renderServices() {
+  const el = document.getElementById('core-services');
+  el.innerHTML = SERVICES.map(s => `
+    <div class="service-row" onclick="window.open('http://localhost:${s.port}','_blank')">
+      <div class="dot dot-check" id="dot-${s.port}"></div>
+      <span class="svc-name">${s.icon} ${s.name}</span>
+      <span class="svc-port">:${s.port}</span>
+    </div>
+  `).join('');
+
+  // Render agent clusters in sidebar
+  const ac = document.getElementById('agent-clusters');
+  const clusters = [
+    {name:"Ingestion (5)",       agents:["rss-feed","web-crawler","newsapi","social-signal","image-harvester"]},
+    {name:"Deduplication (3)",   agents:["fingerprint","semantic-dedup","story-cluster"]},
+    {name:"Verification (8)",    agents:["claim-extraction","cross-reference","source-credibility","truth-score","contradiction","satire","fake-signal","image-verify"]},
+    {name:"NLP (9)",             agents:["entity-extraction","topic-classifier","exam-tagger","summarization","rewrite","headline","translation","terminology","story-timeline"]},
+    {name:"Personalization (6)", agents:["profession-feed","location-feed","trending","morning-brief","notification","reading-depth"]},
+    {name:"Publishing (3)",      agents:["publish-queue","seo","social-share"]},
+    {name:"Monitoring (4)",      agents:["search-indexer","truth-updater","pipeline-health","bias-drift","ad-quality"]},
+  ];
+  ac.innerHTML = clusters.map(c => `
+    <div class="service-row" id="cluster-${c.name.split(' ')[0].toLowerCase()}">
+      <div class="dot dot-check" id="cdot-${c.name.split(' ')[0].toLowerCase()}"></div>
+      <span class="svc-name" style="font-size:12px">${c.name}</span>
+    </div>
+  `).join('');
+
+  // Render agent pills
+  const grid = document.getElementById('agent-status-grid');
+  grid.innerHTML = AGENTS.map(a => `
+    <span class="agent-pill ap-warn" id="agpill-${a}">
+      <span style="width:6px;height:6px;border-radius:50%;background:#f59e0b;display:inline-block"></span>
+      ${a}
+    </span>
+  `).join('');
+}
+
+// Check service health via fetch (will fail due to CORS but at least test connectivity)
+async function checkServices() {
+  let running = 0, total = SERVICES.length;
+  
+  for (const svc of SERVICES) {
+    const dot = document.getElementById(`dot-${svc.port}`);
+    if (!dot) continue;
+    try {
+      const resp = await fetch(`http://localhost:${svc.port}${svc.path}`, {
+        mode: 'no-cors', signal: AbortSignal.timeout(2000)
+      });
+      // no-cors means opaque response = port is open
+      dot.className = 'dot dot-up';
+      running++;
+    } catch {
+      dot.className = 'dot dot-down';
+    }
+  }
+
+  document.getElementById('stat-containers').textContent = total;
+  document.getElementById('stat-running').textContent = running;
+  document.getElementById('stat-unhealthy').textContent = total - running;
+  document.getElementById('stat-uptime').textContent = new Date().toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'});
+
+  if (running === total) {
+    document.getElementById('overall-status').textContent = 'All systems running';
+    document.getElementById('overall-dot').style.background = '#22c55e';
+  } else if (running > total * 0.7) {
+    document.getElementById('overall-status').textContent = `${total-running} services down`;
+    document.getElementById('overall-dot').style.background = '#f59e0b';
+  } else {
+    document.getElementById('overall-status').textContent = `${total-running} services down`;
+    document.getElementById('overall-dot').style.background = '#ef4444';
+  }
+
+  // Update agent pills (approximate — mark all running if api is up)
+  const apiUp = document.getElementById('dot-8000')?.className.includes('up');
+  document.querySelectorAll('.agent-pill').forEach(p => {
+    if (apiUp) {
+      p.className = 'agent-pill ap-up';
+      p.querySelector('span').style.background = '#22c55e';
+    } else {
+      p.className = 'agent-pill ap-down';
+      p.querySelector('span').style.background = '#ef4444';
+    }
+  });
+}
+
+renderServices();
+checkServices();
+setInterval(checkServices, 15000); // re-check every 15s
+</script>
+</body>
+</html>
