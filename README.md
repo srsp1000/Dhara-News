@@ -1,5 +1,5 @@
 # धारा — Dhara News Platform
-
+##All Rights Reserved##
 **Full-stack, 42-agent, AI-powered news platform. Runs entirely locally for free.**
 
 ## What this is
