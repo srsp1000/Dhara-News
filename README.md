@@ -152,7 +152,7 @@ Average time: 8–15 seconds for breaking news, 2–5 minutes for full enrichmen
 
 ## Environment Variables
 
-All in `.env`. Only one is truly required for full features:
+
 
 | Variable               | Required | Where to get                          |
 |------------------------|----------|---------------------------------------|
@@ -164,9 +164,6 @@ All in `.env`. Only one is truly required for full features:
 | `RESEND_API_KEY`       | Optional | https://resend.com (3K emails/mo free)|
 | `FCM_SERVER_KEY`       | Optional | Firebase console (free)               |
 
-Everything else (PG, Redis, RabbitMQ, Qdrant, ES, Ollama) uses the defaults in `.env.example`.
 
-**Without any API keys:** The platform runs fully. Ollama handles all LLM tasks locally.
-Summaries may be slower but are generated entirely on your machine at zero cost.
 
 
